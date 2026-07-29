@@ -95,7 +95,7 @@ public class DeadlockCanvasView extends View {
             }
         });
 
-        // Translucent Glassmorphic Fills (approx 80% opacity so lines under nodes appear diffused)
+        // Translucent Glassmorphic Fills
         processPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         processPaint.setColor(Color.parseColor("#CC181822"));
         processPaint.setStyle(Paint.Style.FILL);
@@ -237,7 +237,6 @@ public class DeadlockCanvasView extends View {
         canvas.translate(panOffsetX, panOffsetY);
         canvas.scale(scaleFactor, scaleFactor);
 
-        // Group edges to calculate curve offsets for multi-edges between same node pairs
         Map<String, List<BankersAlgorithm.Edge>> edgeGroups = getEdgeGroups();
 
         // 1. Draw Edges FIRST so they pass under nodes
@@ -265,7 +264,7 @@ public class DeadlockCanvasView extends View {
             canvas.drawPath(p, cablePaint);
         }
 
-        // 3. Draw Translucent Nodes on TOP of edges (lines show through as diffused lines)
+        // 3. Draw Translucent Nodes on TOP of edges
         for (BankersAlgorithm.Node node : nodes) {
             boolean isSelected = (node == selectedNode);
             boolean isDeadlocked = deadlockResult.deadlockedProcesses.contains(node.id);
@@ -396,7 +395,6 @@ public class DeadlockCanvasView extends View {
             canvas.drawCircle(node.x, node.y, radius + 4, selectedNodePaint);
         }
 
-        // Translucent fill
         canvas.drawCircle(node.x, node.y, radius, processPaint);
 
         // Top Accent Arc
@@ -411,6 +409,22 @@ public class DeadlockCanvasView extends View {
 
         // Subtext Lines
         float currentY = node.y + 2;
+
+        // Max Reqs
+        List<String> maxReqsList = new ArrayList<>();
+        if (node.maxNeed != null) {
+            for (Map.Entry<String, Integer> entry : node.maxNeed.entrySet()) {
+                if (entry.getValue() > 0) {
+                    BankersAlgorithm.Node rNode = findNode(entry.getKey());
+                    String rLabel = rNode != null ? rNode.label : entry.getKey();
+                    maxReqsList.add(rLabel + "(" + entry.getValue() + ")");
+                }
+            }
+        }
+        if (!maxReqsList.isEmpty()) {
+            canvas.drawText("Max: " + String.join(", ", maxReqsList), node.x, currentY, subTextPaint);
+            currentY += 26;
+        }
 
         // Holds
         if (deadlockResult.allocations != null && deadlockResult.allocations.containsKey(node.id)) {
@@ -457,7 +471,6 @@ public class DeadlockCanvasView extends View {
             canvas.drawRoundRect(new RectF(node.x - halfW - 4, node.y - halfH - 4, node.x + halfW + 4, node.y + halfH + 4), 16f, 16f, selectedNodePaint);
         }
 
-        // Translucent fill
         canvas.drawRoundRect(rect, 16f, 16f, resourcePaint);
 
         // Top Accent Line
@@ -578,7 +591,6 @@ public class DeadlockCanvasView extends View {
                 lastPanTouchX = screenX;
                 lastPanTouchY = screenY;
 
-                // 1. Check Out Ports AND In Ports for cable creation
                 for (BankersAlgorithm.Node n : nodes) {
                     float outX = getOutPortX(n);
                     float outY = n.y;
@@ -608,7 +620,6 @@ public class DeadlockCanvasView extends View {
                     }
                 }
 
-                // 2. Check Edge touch
                 BankersAlgorithm.Edge touchedEdge = getEdgeAt(worldX, worldY);
                 if (touchedEdge != null) {
                     selectedEdge = touchedEdge;
@@ -618,7 +629,6 @@ public class DeadlockCanvasView extends View {
                     return true;
                 }
 
-                // 3. Check Node touch
                 BankersAlgorithm.Node touchedNode = getNodeAt(worldX, worldY);
                 if (touchedNode != null) {
                     selectedNode = touchedNode;

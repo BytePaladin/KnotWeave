@@ -12,6 +12,8 @@ public class BankersAlgorithm {
         public String type; // "process" or "resource"
         public String label;
         public int totalInstances = 1;
+        public int availableInstances = 1;
+        public Map<String, Integer> maxNeed = new HashMap<>(); // Resource ID -> Max Need
         
         // For UI Rendering
         public float x = 0, y = 0;
@@ -42,6 +44,11 @@ public class BankersAlgorithm {
         public Map<String, Integer> availableInstances = new HashMap<>();
         public Map<String, Map<String, Integer>> allocations = new HashMap<>();
         public Map<String, Map<String, Integer>> requests = new HashMap<>();
+    }
+
+    public static class SafeStateResult {
+        public boolean isSafe;
+        public List<String> safeSequence = new ArrayList<>();
     }
 
     public static DeadlockResult detectDeadlock(List<Node> nodes, List<Edge> edges) {
@@ -127,6 +134,102 @@ public class BankersAlgorithm {
         result.availableInstances = available;
         result.allocations = allocation;
         result.requests = request;
+        return result;
+    }
+
+    public static SafeStateResult isSafeState(List<Node> nodes, List<Edge> edges) {
+        SafeStateResult result = new SafeStateResult();
+        List<String> processes = new ArrayList<>();
+        Map<String, Integer> resources = new HashMap<>();
+        Map<String, Integer> available = new HashMap<>();
+
+        for (Node n : nodes) {
+            if ("process".equals(n.type)) {
+                processes.add(n.id);
+            } else if ("resource".equals(n.type)) {
+                resources.put(n.id, n.totalInstances);
+                available.put(n.id, n.totalInstances);
+            }
+        }
+
+        Map<String, Map<String, Integer>> allocation = new HashMap<>();
+        Map<String, Map<String, Integer>> request = new HashMap<>();
+        Map<String, Map<String, Integer>> maxNeed = new HashMap<>();
+        Map<String, Map<String, Integer>> need = new HashMap<>();
+
+        for (String p : processes) {
+            allocation.put(p, new HashMap<>());
+            request.put(p, new HashMap<>());
+            maxNeed.put(p, new HashMap<>());
+            need.put(p, new HashMap<>());
+
+            Node pNode = findNode(nodes, p);
+            for (String r : resources.keySet()) {
+                allocation.get(p).put(r, 0);
+                request.get(p).put(r, 0);
+                int mNeed = pNode != null && pNode.maxNeed.containsKey(r) ? pNode.maxNeed.get(r) : 0;
+                maxNeed.get(p).put(r, mNeed);
+            }
+        }
+
+        for (Edge e : edges) {
+            Node sourceNode = findNode(nodes, e.source);
+            Node targetNode = findNode(nodes, e.target);
+            if (sourceNode != null && targetNode != null) {
+                if ("resource".equals(sourceNode.type) && "process".equals(targetNode.type)) {
+                    allocation.get(targetNode.id).put(sourceNode.id, allocation.get(targetNode.id).get(sourceNode.id) + 1);
+                    available.put(sourceNode.id, available.get(sourceNode.id) - 1);
+                } else if ("process".equals(sourceNode.type) && "resource".equals(targetNode.type)) {
+                    request.get(sourceNode.id).put(targetNode.id, request.get(sourceNode.id).get(targetNode.id) + 1);
+                }
+            }
+        }
+
+        for (String p : processes) {
+            for (String r : resources.keySet()) {
+                int explicitNeed = maxNeed.get(p).get(r) > 0 ? Math.max(0, maxNeed.get(p).get(r) - allocation.get(p).get(r)) : 0;
+                need.get(p).put(r, Math.max(request.get(p).get(r), explicitNeed));
+            }
+        }
+
+        for (String r : available.keySet()) {
+            if (available.get(r) < 0) available.put(r, 0);
+        }
+
+        Map<String, Integer> work = new HashMap<>(available);
+        Map<String, Boolean> finish = new HashMap<>();
+        for (String p : processes) {
+            finish.put(p, false);
+        }
+
+        int count = 0;
+        while (count < processes.size()) {
+            boolean found = false;
+            for (String p : processes) {
+                if (!finish.get(p)) {
+                    boolean canSatisfy = true;
+                    for (String r : resources.keySet()) {
+                        if (need.get(p).get(r) > work.get(r)) {
+                            canSatisfy = false;
+                            break;
+                        }
+                    }
+
+                    if (canSatisfy) {
+                        for (String r : resources.keySet()) {
+                            work.put(r, work.get(r) + allocation.get(p).get(r));
+                        }
+                        result.safeSequence.add(p);
+                        finish.put(p, true);
+                        found = true;
+                        count++;
+                    }
+                }
+            }
+            if (!found) break;
+        }
+
+        result.isSafe = (count == processes.size());
         return result;
     }
 

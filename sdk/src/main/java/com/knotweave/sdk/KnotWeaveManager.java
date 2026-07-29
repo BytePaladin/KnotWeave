@@ -29,7 +29,10 @@ public class KnotWeaveManager {
     private DeadlockCanvasView canvas;
 
     private TextView txtDeadlockStatus;
+    private TextView txtSafeStatus;
+    private TextView txtSafeSequence;
     private LinearLayout statusBox;
+    private LinearLayout safeBox;
     private MaterialButton btnAutoResolve;
 
     private LinearLayout propertiesPanel;
@@ -37,6 +40,7 @@ public class KnotWeaveManager {
     private LinearLayout nodePropertiesContainer;
     private TextInputEditText inputLabel;
     private LinearLayout dynamicResourceContainer;
+    private LinearLayout dynamicMaxNeedContainer;
     private MaterialButton btnDeleteSelection;
     private MaterialButton btnRemoveSelectedLine;
 
@@ -61,7 +65,10 @@ public class KnotWeaveManager {
         txtToastMsg = view.findViewById(R.id.txtToastMsg);
 
         txtDeadlockStatus = view.findViewById(R.id.txtDeadlockStatus);
+        txtSafeStatus = view.findViewById(R.id.txtSafeStatus);
+        txtSafeSequence = view.findViewById(R.id.txtSafeSequence);
         statusBox = view.findViewById(R.id.statusBox);
+        safeBox = view.findViewById(R.id.safeBox);
         btnAutoResolve = view.findViewById(R.id.btnAutoResolve);
 
         propertiesPanel = view.findViewById(R.id.propertiesPanel);
@@ -69,6 +76,7 @@ public class KnotWeaveManager {
         nodePropertiesContainer = view.findViewById(R.id.nodePropertiesContainer);
         inputLabel = view.findViewById(R.id.inputLabel);
         dynamicResourceContainer = view.findViewById(R.id.dynamicResourceContainer);
+        dynamicMaxNeedContainer = view.findViewById(R.id.dynamicMaxNeedContainer);
         btnDeleteSelection = view.findViewById(R.id.btnDeleteSelection);
         btnRemoveSelectedLine = view.findViewById(R.id.btnRemoveSelectedLine);
 
@@ -150,6 +158,7 @@ public class KnotWeaveManager {
 
         if (inputLabel != null) inputLabel.setText(node.label);
         if (dynamicResourceContainer != null) dynamicResourceContainer.removeAllViews();
+        if (dynamicMaxNeedContainer != null) dynamicMaxNeedContainer.removeAllViews();
 
         if ("resource".equals(node.type) && dynamicResourceContainer != null) {
             LinearLayout row = new LinearLayout(ctx);
@@ -190,6 +199,59 @@ public class KnotWeaveManager {
             row.addView(label);
             row.addView(et);
             dynamicResourceContainer.addView(row);
+
+        } else if ("process".equals(node.type) && dynamicMaxNeedContainer != null) {
+            TextView header = new TextView(ctx);
+            header.setText("Max Need (Banker's Algorithm)");
+            header.setTextColor(Color.parseColor("#99FFFFFF"));
+            header.setTextSize(12f);
+            header.setPadding(0, 12, 0, 8);
+            dynamicMaxNeedContainer.addView(header);
+
+            for (BankersAlgorithm.Node rNode : nodes) {
+                if (!"resource".equals(rNode.type)) continue;
+
+                LinearLayout row = new LinearLayout(ctx);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(0, 6, 0, 6);
+
+                TextView label = new TextView(ctx);
+                label.setText("Max Need for " + rNode.label + ":");
+                label.setTextColor(Color.parseColor("#D0BCFF"));
+                label.setTextSize(13f);
+                label.setTypeface(null, android.graphics.Typeface.BOLD);
+                LinearLayout.LayoutParams lpText = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+                label.setLayoutParams(lpText);
+
+                EditText et = new EditText(ctx);
+                et.setInputType(InputType.TYPE_CLASS_NUMBER);
+                int curVal = node.maxNeed.containsKey(rNode.id) ? node.maxNeed.get(rNode.id) : 0;
+                et.setText(String.valueOf(curVal));
+                et.setTextColor(Color.WHITE);
+                et.setTextSize(13f);
+                et.setTypeface(null, android.graphics.Typeface.BOLD);
+                et.setGravity(Gravity.CENTER);
+                et.setBackgroundResource(R.drawable.input_field_bg);
+                LinearLayout.LayoutParams lpEt = new LinearLayout.LayoutParams(dpToPx(75), dpToPx(38));
+                et.setLayoutParams(lpEt);
+
+                et.addTextChangedListener(new TextWatcher() {
+                    @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                    @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+                    @Override public void afterTextChanged(Editable s) {
+                        try {
+                            int val = Integer.parseInt(s.toString());
+                            node.maxNeed.put(rNode.id, Math.max(0, val));
+                            updateGraph();
+                        } catch (Exception ignored) {}
+                    }
+                });
+
+                row.addView(label);
+                row.addView(et);
+                dynamicMaxNeedContainer.addView(row);
+            }
         }
     }
 
@@ -349,6 +411,7 @@ public class KnotWeaveManager {
 
     private void updateGraph() {
         BankersAlgorithm.DeadlockResult deadlock = BankersAlgorithm.detectDeadlock(nodes, edges);
+        BankersAlgorithm.SafeStateResult safe = BankersAlgorithm.isSafeState(nodes, edges);
 
         canvas.setDeadlockResult(deadlock);
         canvas.setGraph(nodes, edges);
@@ -359,13 +422,43 @@ public class KnotWeaveManager {
                 txtDeadlockStatus.setTextColor(Color.parseColor("#FCA5A5"));
                 txtDeadlockStatus.setText("DEADLOCK DETECTED");
 
+                if (safeBox != null) safeBox.setVisibility(View.GONE);
                 if (btnAutoResolve != null) btnAutoResolve.setVisibility(View.VISIBLE);
             } else {
                 statusBox.setBackgroundColor(Color.parseColor("#3310B981"));
                 txtDeadlockStatus.setTextColor(Color.parseColor("#6EE7B7"));
                 txtDeadlockStatus.setText("NO DEADLOCK");
 
+                if (safeBox != null) safeBox.setVisibility(View.VISIBLE);
                 if (btnAutoResolve != null) btnAutoResolve.setVisibility(View.GONE);
+
+                if (safeBox != null && txtSafeStatus != null && txtSafeSequence != null) {
+                    if (safe.isSafe) {
+                        safeBox.setBackgroundColor(Color.parseColor("#3338BDF8"));
+                        txtSafeStatus.setTextColor(Color.parseColor("#7DDBFC"));
+                        txtSafeStatus.setText("State: SAFE (Banker's)");
+
+                        StringBuilder seq = new StringBuilder("Safe Sequence: ");
+                        for (int i = 0; i < safe.safeSequence.size(); i++) {
+                            String pId = safe.safeSequence.get(i);
+                            BankersAlgorithm.Node pNode = null;
+                            for (BankersAlgorithm.Node n : nodes) {
+                                if (n.id.equals(pId)) {
+                                    pNode = n;
+                                    break;
+                                }
+                            }
+                            seq.append(pNode != null ? pNode.label : pId.toUpperCase());
+                            if (i < safe.safeSequence.size() - 1) seq.append(" ➔ ");
+                        }
+                        txtSafeSequence.setText(seq.toString());
+                    } else {
+                        safeBox.setBackgroundColor(Color.parseColor("#33F59E0B"));
+                        txtSafeStatus.setTextColor(Color.parseColor("#FCD34D"));
+                        txtSafeStatus.setText("State: UNSAFE (Banker's)");
+                        txtSafeSequence.setText("Safe Sequence: None");
+                    }
+                }
             }
         }
     }
