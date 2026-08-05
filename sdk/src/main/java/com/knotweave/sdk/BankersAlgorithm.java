@@ -41,6 +41,15 @@ public class BankersAlgorithm {
     public static class DeadlockResult {
         public boolean isDeadlocked;
         public List<String> deadlockedProcesses = new ArrayList<>();
+
+        // Canonical 2D Matrix & 1D Vector representations (N = processes, M = resources)
+        public int[][] allocationMatrix;
+        public int[][] requestMatrix;
+        public int[] availableVector;
+        public String[] processLabels;
+        public String[] resourceLabels;
+
+        // Backward compatibility mappings
         public Map<String, Integer> availableInstances = new HashMap<>();
         public Map<String, Map<String, Integer>> allocations = new HashMap<>();
         public Map<String, Map<String, Integer>> requests = new HashMap<>();
@@ -49,73 +58,130 @@ public class BankersAlgorithm {
     public static class SafeStateResult {
         public boolean isSafe;
         public List<String> safeSequence = new ArrayList<>();
+
+        // Canonical 2D Matrix & 1D Vector representations (N = processes, M = resources)
+        public int[][] allocationMatrix;
+        public int[][] maxMatrix;
+        public int[][] needMatrix;
+        public int[] availableVector;
+        public String[] processLabels;
+        public String[] resourceLabels;
     }
 
+    /**
+     * Detects deadlocks in the Resource Allocation Graph using 2D integer matrices
+     * and the standard Work-Finish vector algorithm.
+     *
+     * @param nodes Graph nodes containing processes and resources
+     * @param edges Graph edges representing allocations (R -> P) and requests (P -> R)
+     * @return DeadlockResult containing deadlock status, deadlocked process list, and 2D matrices
+     */
     public static DeadlockResult detectDeadlock(List<Node> nodes, List<Edge> edges) {
         DeadlockResult result = new DeadlockResult();
-        List<String> processes = new ArrayList<>();
-        Map<String, Integer> resources = new HashMap<>();
-        Map<String, Integer> available = new HashMap<>();
+
+        // 1. Separate and index Processes (N) and Resources (M)
+        List<Node> processNodes = new ArrayList<>();
+        List<Node> resourceNodes = new ArrayList<>();
+
+        Map<String, Integer> pIndex = new HashMap<>();
+        Map<String, Integer> rIndex = new HashMap<>();
 
         for (Node n : nodes) {
             if ("process".equals(n.type)) {
-                processes.add(n.id);
+                pIndex.put(n.id, processNodes.size());
+                processNodes.add(n);
             } else if ("resource".equals(n.type)) {
-                resources.put(n.id, n.totalInstances);
-                available.put(n.id, n.totalInstances);
+                rIndex.put(n.id, resourceNodes.size());
+                resourceNodes.add(n);
             }
         }
 
-        Map<String, Map<String, Integer>> allocation = new HashMap<>();
-        Map<String, Map<String, Integer>> request = new HashMap<>();
+        int n = processNodes.size();
+        int m = resourceNodes.size();
 
-        for (String p : processes) {
-            allocation.put(p, new HashMap<>());
-            request.put(p, new HashMap<>());
-            for (String r : resources.keySet()) {
-                allocation.get(p).put(r, 0);
-                request.get(p).put(r, 0);
-            }
+        if (n == 0) {
+            result.isDeadlocked = false;
+            return result;
         }
 
+        // 2. Initialize 2D Matrices and Vectors
+        // Allocation[n][m]: instances of resource j currently allocated to process i
+        int[][] allocation = new int[n][m];
+        // Request[n][m]: instances of resource j requested by process i
+        int[][] request = new int[n][m];
+        // Available[m]: unallocated instances of resource j
+        int[] available = new int[m];
+
+        String[] pLabels = new String[n];
+        for (int i = 0; i < n; i++) {
+            pLabels[i] = processNodes.get(i).label;
+        }
+
+        String[] rLabels = new String[m];
+        for (int j = 0; j < m; j++) {
+            rLabels[j] = resourceNodes.get(j).label;
+            available[j] = resourceNodes.get(j).totalInstances;
+        }
+
+        // 3. Populate Matrices from Graph Edges
         for (Edge e : edges) {
             Node sourceNode = findNode(nodes, e.source);
             Node targetNode = findNode(nodes, e.target);
 
             if (sourceNode != null && targetNode != null) {
+                // Request edge: Process -> Resource
                 if ("process".equals(sourceNode.type) && "resource".equals(targetNode.type)) {
-                    request.get(sourceNode.id).put(targetNode.id, request.get(sourceNode.id).get(targetNode.id) + 1);
-                } else if ("resource".equals(sourceNode.type) && "process".equals(targetNode.type)) {
-                    allocation.get(targetNode.id).put(sourceNode.id, allocation.get(targetNode.id).get(sourceNode.id) + 1);
-                    available.put(sourceNode.id, available.get(sourceNode.id) - 1);
+                    Integer pIdx = pIndex.get(sourceNode.id);
+                    Integer rIdx = rIndex.get(targetNode.id);
+                    if (pIdx != null && rIdx != null) {
+                        request[pIdx][rIdx]++;
+                    }
+                }
+                // Allocation edge: Resource -> Process
+                else if ("resource".equals(sourceNode.type) && "process".equals(targetNode.type)) {
+                    Integer rIdx = rIndex.get(sourceNode.id);
+                    Integer pIdx = pIndex.get(targetNode.id);
+                    if (pIdx != null && rIdx != null) {
+                        allocation[pIdx][rIdx]++;
+                        available[rIdx]--;
+                    }
                 }
             }
         }
 
-        for (String r : available.keySet()) {
-            if (available.get(r) < 0) available.put(r, 0);
+        // Clamp negative available to 0 (in case of graph over-allocation)
+        for (int j = 0; j < m; j++) {
+            if (available[j] < 0) {
+                available[j] = 0;
+            }
         }
 
-        boolean[] finish = new boolean[processes.size()];
-        Map<String, Integer> work = new HashMap<>(available);
+        // 4. Deadlock Detection Algorithm using Work & Finish Vectors
+        // Work vector: initialized to Available
+        int[] work = new int[m];
+        System.arraycopy(available, 0, work, 0, m);
+
+        // Finish vector: initialized to false for all processes
+        boolean[] finish = new boolean[n];
         boolean madeProgress = true;
 
         while (madeProgress) {
             madeProgress = false;
-            for (int i = 0; i < processes.size(); i++) {
+            for (int i = 0; i < n; i++) {
                 if (!finish[i]) {
-                    String p = processes.get(i);
+                    // Check if Request[i][j] <= Work[j] for all resources j
                     boolean canSatisfy = true;
-                    for (String r : resources.keySet()) {
-                        if (request.get(p).get(r) > work.get(r)) {
+                    for (int j = 0; j < m; j++) {
+                        if (request[i][j] > work[j]) {
                             canSatisfy = false;
                             break;
                         }
                     }
 
+                    // If condition is satisfied, process runs to completion and releases resources
                     if (canSatisfy) {
-                        for (String r : resources.keySet()) {
-                            work.put(r, work.get(r) + allocation.get(p).get(r));
+                        for (int j = 0; j < m; j++) {
+                            work[j] += allocation[i][j];
                         }
                         finish[i] = true;
                         madeProgress = true;
@@ -124,112 +190,184 @@ public class BankersAlgorithm {
             }
         }
 
-        for (int i = 0; i < processes.size(); i++) {
+        // 5. Any process with finish[i] == false is part of a deadlock
+        for (int i = 0; i < n; i++) {
             if (!finish[i]) {
-                result.deadlockedProcesses.add(processes.get(i));
+                result.deadlockedProcesses.add(processNodes.get(i).id);
             }
         }
 
         result.isDeadlocked = !result.deadlockedProcesses.isEmpty();
-        result.availableInstances = available;
-        result.allocations = allocation;
-        result.requests = request;
+        result.allocationMatrix = allocation;
+        result.requestMatrix = request;
+        result.availableVector = available;
+        result.processLabels = pLabels;
+        result.resourceLabels = rLabels;
+
+        // Backward compatibility mappings
+        for (int j = 0; j < m; j++) {
+            result.availableInstances.put(resourceNodes.get(j).id, available[j]);
+        }
+        for (int i = 0; i < n; i++) {
+            String pId = processNodes.get(i).id;
+            result.allocations.put(pId, new HashMap<>());
+            result.requests.put(pId, new HashMap<>());
+            for (int j = 0; j < m; j++) {
+                String rId = resourceNodes.get(j).id;
+                result.allocations.get(pId).put(rId, allocation[i][j]);
+                result.requests.get(pId).put(rId, request[i][j]);
+            }
+        }
+
         return result;
     }
 
+    /**
+     * Evaluates whether the system is in a Safe State using Banker's Algorithm with 2D matrices.
+     * Computes Allocation, Max, Need matrices and returns a valid Safe Execution Sequence.
+     *
+     * @param nodes Graph nodes
+     * @param edges Graph edges
+     * @return SafeStateResult containing safety flag, safe sequence, and 2D matrices
+     */
     public static SafeStateResult isSafeState(List<Node> nodes, List<Edge> edges) {
         SafeStateResult result = new SafeStateResult();
-        List<String> processes = new ArrayList<>();
-        Map<String, Integer> resources = new HashMap<>();
-        Map<String, Integer> available = new HashMap<>();
+
+        // 1. Separate and index Processes (N) and Resources (M)
+        List<Node> processNodes = new ArrayList<>();
+        List<Node> resourceNodes = new ArrayList<>();
+
+        Map<String, Integer> pIndex = new HashMap<>();
+        Map<String, Integer> rIndex = new HashMap<>();
 
         for (Node n : nodes) {
             if ("process".equals(n.type)) {
-                processes.add(n.id);
+                pIndex.put(n.id, processNodes.size());
+                processNodes.add(n);
             } else if ("resource".equals(n.type)) {
-                resources.put(n.id, n.totalInstances);
-                available.put(n.id, n.totalInstances);
+                rIndex.put(n.id, resourceNodes.size());
+                resourceNodes.add(n);
             }
         }
 
-        Map<String, Map<String, Integer>> allocation = new HashMap<>();
-        Map<String, Map<String, Integer>> request = new HashMap<>();
-        Map<String, Map<String, Integer>> maxNeed = new HashMap<>();
-        Map<String, Map<String, Integer>> need = new HashMap<>();
+        int n = processNodes.size();
+        int m = resourceNodes.size();
 
-        for (String p : processes) {
-            allocation.put(p, new HashMap<>());
-            request.put(p, new HashMap<>());
-            maxNeed.put(p, new HashMap<>());
-            need.put(p, new HashMap<>());
+        if (n == 0) {
+            result.isSafe = true;
+            return result;
+        }
 
-            Node pNode = findNode(nodes, p);
-            for (String r : resources.keySet()) {
-                allocation.get(p).put(r, 0);
-                request.get(p).put(r, 0);
-                int mNeed = pNode != null && pNode.maxNeed.containsKey(r) ? pNode.maxNeed.get(r) : 0;
-                maxNeed.get(p).put(r, mNeed);
+        // 2. Initialize Matrices & Vectors
+        int[][] allocation = new int[n][m];
+        int[][] request = new int[n][m];
+        int[][] maxNeed = new int[n][m];
+        int[][] need = new int[n][m];
+        int[] available = new int[m];
+
+        String[] pLabels = new String[n];
+        for (int i = 0; i < n; i++) {
+            pLabels[i] = processNodes.get(i).label;
+        }
+
+        String[] rLabels = new String[m];
+        for (int j = 0; j < m; j++) {
+            rLabels[j] = resourceNodes.get(j).label;
+            available[j] = resourceNodes.get(j).totalInstances;
+        }
+
+        // Populate Max Matrix from Node configuration
+        for (int i = 0; i < n; i++) {
+            Node pNode = processNodes.get(i);
+            for (int j = 0; j < m; j++) {
+                String rId = resourceNodes.get(j).id;
+                int mNeed = (pNode.maxNeed != null && pNode.maxNeed.containsKey(rId)) ? pNode.maxNeed.get(rId) : 0;
+                maxNeed[i][j] = mNeed;
             }
         }
 
+        // 3. Populate Allocation and Request from Edges
         for (Edge e : edges) {
             Node sourceNode = findNode(nodes, e.source);
             Node targetNode = findNode(nodes, e.target);
+
             if (sourceNode != null && targetNode != null) {
                 if ("resource".equals(sourceNode.type) && "process".equals(targetNode.type)) {
-                    allocation.get(targetNode.id).put(sourceNode.id, allocation.get(targetNode.id).get(sourceNode.id) + 1);
-                    available.put(sourceNode.id, available.get(sourceNode.id) - 1);
+                    Integer rIdx = rIndex.get(sourceNode.id);
+                    Integer pIdx = pIndex.get(targetNode.id);
+                    if (rIdx != null && pIdx != null) {
+                        allocation[pIdx][rIdx]++;
+                        available[rIdx]--;
+                    }
                 } else if ("process".equals(sourceNode.type) && "resource".equals(targetNode.type)) {
-                    request.get(sourceNode.id).put(targetNode.id, request.get(sourceNode.id).get(targetNode.id) + 1);
+                    Integer pIdx = pIndex.get(sourceNode.id);
+                    Integer rIdx = rIndex.get(targetNode.id);
+                    if (pIdx != null && rIdx != null) {
+                        request[pIdx][rIdx]++;
+                    }
                 }
             }
         }
 
-        for (String p : processes) {
-            for (String r : resources.keySet()) {
-                int explicitNeed = maxNeed.get(p).get(r) > 0 ? Math.max(0, maxNeed.get(p).get(r) - allocation.get(p).get(r)) : 0;
-                need.get(p).put(r, Math.max(request.get(p).get(r), explicitNeed));
+        // 4. Compute Need Matrix: Need[i][j] = Max(Request[i][j], MaxNeed[i][j] - Allocation[i][j])
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < m; j++) {
+                int explicitNeed = maxNeed[i][j] > 0 ? Math.max(0, maxNeed[i][j] - allocation[i][j]) : 0;
+                need[i][j] = Math.max(request[i][j], explicitNeed);
             }
         }
 
-        for (String r : available.keySet()) {
-            if (available.get(r) < 0) available.put(r, 0);
+        // Clamp negative available to 0
+        for (int j = 0; j < m; j++) {
+            if (available[j] < 0) {
+                available[j] = 0;
+            }
         }
 
-        Map<String, Integer> work = new HashMap<>(available);
-        Map<String, Boolean> finish = new HashMap<>();
-        for (String p : processes) {
-            finish.put(p, false);
-        }
+        // 5. Banker's Safety Algorithm using Work & Finish Vectors
+        int[] work = new int[m];
+        System.arraycopy(available, 0, work, 0, m);
 
+        boolean[] finish = new boolean[n];
         int count = 0;
-        while (count < processes.size()) {
+
+        while (count < n) {
             boolean found = false;
-            for (String p : processes) {
-                if (!finish.get(p)) {
+            for (int i = 0; i < n; i++) {
+                if (!finish[i]) {
+                    // Check if Need[i][j] <= Work[j] for all resources j
                     boolean canSatisfy = true;
-                    for (String r : resources.keySet()) {
-                        if (need.get(p).get(r) > work.get(r)) {
+                    for (int j = 0; j < m; j++) {
+                        if (need[i][j] > work[j]) {
                             canSatisfy = false;
                             break;
                         }
                     }
 
                     if (canSatisfy) {
-                        for (String r : resources.keySet()) {
-                            work.put(r, work.get(r) + allocation.get(p).get(r));
+                        for (int j = 0; j < m; j++) {
+                            work[j] += allocation[i][j];
                         }
-                        result.safeSequence.add(p);
-                        finish.put(p, true);
+                        result.safeSequence.add(processNodes.get(i).id);
+                        finish[i] = true;
                         found = true;
                         count++;
                     }
                 }
             }
-            if (!found) break;
+            if (!found) {
+                break;
+            }
         }
 
-        result.isSafe = (count == processes.size());
+        result.isSafe = (count == n);
+        result.allocationMatrix = allocation;
+        result.maxMatrix = maxNeed;
+        result.needMatrix = need;
+        result.availableVector = available;
+        result.processLabels = pLabels;
+        result.resourceLabels = rLabels;
+
         return result;
     }
 
