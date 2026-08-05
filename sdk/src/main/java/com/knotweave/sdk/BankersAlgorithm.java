@@ -39,76 +39,134 @@ public class BankersAlgorithm {
     public static class DeadlockResult {
         public boolean isDeadlocked;
         public List<String> deadlockedProcesses = new ArrayList<>();
+
+        // Canonical 2D Matrix & 1D Vector representations (N = processes, M = resources)
+        public int[][] allocationMatrix;
+        public int[][] requestMatrix;
+        public int[] availableVector;
+        public String[] processLabels;
+        public String[] resourceLabels;
+
+        // Backward compatibility mappings
         public Map<String, Integer> availableInstances = new HashMap<>();
         public Map<String, Map<String, Integer>> allocations = new HashMap<>();
         public Map<String, Map<String, Integer>> requests = new HashMap<>();
     }
 
+    /**
+     * Detects deadlocks in the Resource Allocation Graph using 2D integer matrices
+     * and the standard Work-Finish vector algorithm.
+     *
+     * @param nodes Graph nodes containing processes and resources
+     * @param edges Graph edges representing allocations (R -> P) and requests (P -> R)
+     * @return DeadlockResult containing deadlock status, deadlocked process list, and 2D matrices
+     */
     public static DeadlockResult detectDeadlock(List<Node> nodes, List<Edge> edges) {
         DeadlockResult result = new DeadlockResult();
-        List<String> processes = new ArrayList<>();
-        Map<String, Integer> resources = new HashMap<>();
-        Map<String, Integer> available = new HashMap<>();
+
+        // 1. Separate and index Processes (N) and Resources (M)
+        List<Node> processNodes = new ArrayList<>();
+        List<Node> resourceNodes = new ArrayList<>();
+
+        Map<String, Integer> pIndex = new HashMap<>();
+        Map<String, Integer> rIndex = new HashMap<>();
 
         for (Node n : nodes) {
             if ("process".equals(n.type)) {
-                processes.add(n.id);
+                pIndex.put(n.id, processNodes.size());
+                processNodes.add(n);
             } else if ("resource".equals(n.type)) {
-                resources.put(n.id, n.totalInstances);
-                available.put(n.id, n.totalInstances);
+                rIndex.put(n.id, resourceNodes.size());
+                resourceNodes.add(n);
             }
         }
 
-        Map<String, Map<String, Integer>> allocation = new HashMap<>();
-        Map<String, Map<String, Integer>> request = new HashMap<>();
+        int n = processNodes.size();
+        int m = resourceNodes.size();
 
-        for (String p : processes) {
-            allocation.put(p, new HashMap<>());
-            request.put(p, new HashMap<>());
-            for (String r : resources.keySet()) {
-                allocation.get(p).put(r, 0);
-                request.get(p).put(r, 0);
-            }
+        if (n == 0) {
+            result.isDeadlocked = false;
+            return result;
         }
 
+        // 2. Initialize 2D Matrices and Vectors
+        // Allocation[n][m]: instances of resource j currently allocated to process i
+        int[][] allocation = new int[n][m];
+        // Request[n][m]: instances of resource j requested by process i
+        int[][] request = new int[n][m];
+        // Available[m]: unallocated instances of resource j
+        int[] available = new int[m];
+
+        String[] pLabels = new String[n];
+        for (int i = 0; i < n; i++) {
+            pLabels[i] = processNodes.get(i).label;
+        }
+
+        String[] rLabels = new String[m];
+        for (int j = 0; j < m; j++) {
+            rLabels[j] = resourceNodes.get(j).label;
+            available[j] = resourceNodes.get(j).totalInstances;
+        }
+
+        // 3. Populate Matrices from Graph Edges
         for (Edge e : edges) {
             Node sourceNode = findNode(nodes, e.source);
             Node targetNode = findNode(nodes, e.target);
 
             if (sourceNode != null && targetNode != null) {
+                // Request edge: Process -> Resource
                 if ("process".equals(sourceNode.type) && "resource".equals(targetNode.type)) {
-                    request.get(sourceNode.id).put(targetNode.id, request.get(sourceNode.id).get(targetNode.id) + 1);
-                } else if ("resource".equals(sourceNode.type) && "process".equals(targetNode.type)) {
-                    allocation.get(targetNode.id).put(sourceNode.id, allocation.get(targetNode.id).get(sourceNode.id) + 1);
-                    available.put(sourceNode.id, available.get(sourceNode.id) - 1);
+                    Integer pIdx = pIndex.get(sourceNode.id);
+                    Integer rIdx = rIndex.get(targetNode.id);
+                    if (pIdx != null && rIdx != null) {
+                        request[pIdx][rIdx]++;
+                    }
+                }
+                // Allocation edge: Resource -> Process
+                else if ("resource".equals(sourceNode.type) && "process".equals(targetNode.type)) {
+                    Integer rIdx = rIndex.get(sourceNode.id);
+                    Integer pIdx = pIndex.get(targetNode.id);
+                    if (pIdx != null && rIdx != null) {
+                        allocation[pIdx][rIdx]++;
+                        available[rIdx]--;
+                    }
                 }
             }
         }
 
-        for (String r : available.keySet()) {
-            if (available.get(r) < 0) available.put(r, 0);
+        // Clamp negative available to 0 (in case of graph over-allocation)
+        for (int j = 0; j < m; j++) {
+            if (available[j] < 0) {
+                available[j] = 0;
+            }
         }
 
-        boolean[] finish = new boolean[processes.size()];
-        Map<String, Integer> work = new HashMap<>(available);
+        // 4. Deadlock Detection Algorithm using Work & Finish Vectors
+        // Work vector: initialized to Available
+        int[] work = new int[m];
+        System.arraycopy(available, 0, work, 0, m);
+
+        // Finish vector: initialized to false for all processes
+        boolean[] finish = new boolean[n];
         boolean madeProgress = true;
 
         while (madeProgress) {
             madeProgress = false;
-            for (int i = 0; i < processes.size(); i++) {
+            for (int i = 0; i < n; i++) {
                 if (!finish[i]) {
-                    String p = processes.get(i);
+                    // Check if Request[i][j] <= Work[j] for all resources j
                     boolean canSatisfy = true;
-                    for (String r : resources.keySet()) {
-                        if (request.get(p).get(r) > work.get(r)) {
+                    for (int j = 0; j < m; j++) {
+                        if (request[i][j] > work[j]) {
                             canSatisfy = false;
                             break;
                         }
                     }
 
+                    // If condition is satisfied, process runs to completion and releases resources
                     if (canSatisfy) {
-                        for (String r : resources.keySet()) {
-                            work.put(r, work.get(r) + allocation.get(p).get(r));
+                        for (int j = 0; j < m; j++) {
+                            work[j] += allocation[i][j];
                         }
                         finish[i] = true;
                         madeProgress = true;
@@ -117,16 +175,35 @@ public class BankersAlgorithm {
             }
         }
 
-        for (int i = 0; i < processes.size(); i++) {
+        // 5. Any process with finish[i] == false is part of a deadlock
+        for (int i = 0; i < n; i++) {
             if (!finish[i]) {
-                result.deadlockedProcesses.add(processes.get(i));
+                result.deadlockedProcesses.add(processNodes.get(i).id);
             }
         }
 
         result.isDeadlocked = !result.deadlockedProcesses.isEmpty();
-        result.availableInstances = available;
-        result.allocations = allocation;
-        result.requests = request;
+        result.allocationMatrix = allocation;
+        result.requestMatrix = request;
+        result.availableVector = available;
+        result.processLabels = pLabels;
+        result.resourceLabels = rLabels;
+
+        // Backward compatibility mappings
+        for (int j = 0; j < m; j++) {
+            result.availableInstances.put(resourceNodes.get(j).id, available[j]);
+        }
+        for (int i = 0; i < n; i++) {
+            String pId = processNodes.get(i).id;
+            result.allocations.put(pId, new HashMap<>());
+            result.requests.put(pId, new HashMap<>());
+            for (int j = 0; j < m; j++) {
+                String rId = resourceNodes.get(j).id;
+                result.allocations.get(pId).put(rId, allocation[i][j]);
+                result.requests.get(pId).put(rId, request[i][j]);
+            }
+        }
+
         return result;
     }
 
