@@ -273,6 +273,81 @@
                         app:cornerRadius="10dp" />
                 </LinearLayout>
 
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnToggleMatrix"
+                    android:layout_width="match_parent"
+                    android:layout_height="42dp"
+                    android:layout_marginTop="6dp"
+                    android:text="Toggle Matrix Table"
+                    android:textColor="#FFFFFF"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    app:backgroundTint="#059669"
+                    app:cornerRadius="10dp" />
+
+                <!-- Interactive Matrix Tables -->
+                <LinearLayout
+                    android:id="@+id/matrixInputContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:background="#15FFFFFF"
+                    android:orientation="vertical"
+                    android:padding="12dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="12dp"
+                        android:text="Live Matrix Input"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <HorizontalScrollView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content">
+
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical">
+
+                            <!-- Allocation Matrix -->
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginBottom="6dp"
+                                android:text="Allocation Matrix (A)"
+                                android:textColor="#D0BCFF"
+                                android:textSize="12sp"
+                                android:textStyle="bold" />
+
+                            <TableLayout
+                                android:id="@+id/tableAllocation"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginBottom="16dp" />
+
+                            <!-- Request Matrix -->
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginBottom="6dp"
+                                android:text="Request Matrix (Q)"
+                                android:textColor="#D0BCFF"
+                                android:textSize="12sp"
+                                android:textStyle="bold" />
+
+                            <TableLayout
+                                android:id="@+id/tableRequest"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content" />
+                        </LinearLayout>
+                    </HorizontalScrollView>
+                </LinearLayout>
+
                 <!-- Contextual Selection Properties Panel -->
                 <LinearLayout
                     android:id="@+id/propertiesPanel"

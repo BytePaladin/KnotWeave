@@ -13,6 +13,8 @@ import android.view.View;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.TableLayout;
+import android.widget.TableRow;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.textfield.TextInputEditText;
@@ -47,6 +49,11 @@ public class KnotWeaveManager {
     private TextInputEditText inputGenP;
     private TextInputEditText inputGenR;
     private TextInputEditText inputGenI;
+
+    private LinearLayout matrixInputContainer;
+    private TableLayout tableAllocation;
+    private TableLayout tableRequest;
+    private boolean isBuildingMatrix = false;
 
     private LinearLayout toastBanner;
     private TextView txtToastMsg;
@@ -84,6 +91,11 @@ public class KnotWeaveManager {
         inputGenR = view.findViewById(R.id.inputGenR);
         inputGenI = view.findViewById(R.id.inputGenI);
 
+        matrixInputContainer = view.findViewById(R.id.matrixInputContainer);
+        tableAllocation = view.findViewById(R.id.tableAllocation);
+        tableRequest = view.findViewById(R.id.tableRequest);
+
+        MaterialButton btnToggleMatrix = view.findViewById(R.id.btnToggleMatrix);
         MaterialButton btnAutoGenerateBatch = view.findViewById(R.id.btnAutoGenerateBatch);
         MaterialButton btnAddProcess = view.findViewById(R.id.btnAddProcess);
         MaterialButton btnAddResource = view.findViewById(R.id.btnAddResource);
@@ -96,6 +108,17 @@ public class KnotWeaveManager {
         if (btnForceDeadlock != null) btnForceDeadlock.setOnClickListener(v -> forceDeadlock());
         if (btnClear != null) btnClear.setOnClickListener(v -> clearGraph());
         if (btnAutoResolve != null) btnAutoResolve.setOnClickListener(v -> autoResolve());
+
+        if (btnToggleMatrix != null) {
+            btnToggleMatrix.setOnClickListener(v -> {
+                if (matrixInputContainer.getVisibility() == View.VISIBLE) {
+                    matrixInputContainer.setVisibility(View.GONE);
+                } else {
+                    matrixInputContainer.setVisibility(View.VISIBLE);
+                    buildMatrixTables();
+                }
+            });
+        }
 
         if (btnDeleteSelection != null) btnDeleteSelection.setOnClickListener(v -> deleteSelection());
         if (btnRemoveSelectedLine != null) btnRemoveSelectedLine.setOnClickListener(v -> deleteSelection());
@@ -120,10 +143,32 @@ public class KnotWeaveManager {
         canvas.setEdgeCreatedListener(new DeadlockCanvasView.OnEdgeCreatedListener() {
             @Override
             public void onEdgeCreated(BankersAlgorithm.Node source, BankersAlgorithm.Node target) {
-                edges.add(new BankersAlgorithm.Edge(UUID.randomUUID().toString(), source.id, target.id));
                 boolean isRequest = "process".equals(source.type);
+                if (!isRequest) {
+                    int currentAllocs = 0;
+                    for (BankersAlgorithm.Edge e : edges) {
+                        if (e.source.equals(source.id)) currentAllocs++;
+                    }
+                    if (currentAllocs >= source.totalInstances) {
+                        showToast("Cannot allocate! " + source.label + " has no available instances.");
+                        return;
+                    }
+                    
+                    int newAllocCountForTarget = 0;
+                    for (BankersAlgorithm.Edge e : edges) {
+                        if (e.source.equals(source.id) && e.target.equals(target.id)) newAllocCountForTarget++;
+                    }
+                    newAllocCountForTarget++;
+                    
+                    int currentMax = target.maxNeed.containsKey(source.id) ? target.maxNeed.get(source.id) : 0;
+                    if (newAllocCountForTarget > currentMax) {
+                        target.maxNeed.put(source.id, newAllocCountForTarget);
+                    }
+                }
+
+                edges.add(new BankersAlgorithm.Edge(UUID.randomUUID().toString(), source.id, target.id));
                 showToast("Created " + (isRequest ? "Request" : "Allocation") + ": " + source.label + " ➔ " + target.label);
-                updateGraph();
+                refreshState(true);
             }
 
             @Override
@@ -241,8 +286,23 @@ public class KnotWeaveManager {
                     @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
                     @Override public void afterTextChanged(Editable s) {
                         try {
-                            int val = Integer.parseInt(s.toString());
-                            node.maxNeed.put(rNode.id, Math.max(0, val));
+                            int originalVal = Integer.parseInt(s.toString());
+                            int val = originalVal;
+                            
+                            int currentAlloc = 0;
+                            for (BankersAlgorithm.Edge e : edges) {
+                                if (e.source.equals(rNode.id) && e.target.equals(node.id)) currentAlloc++;
+                            }
+                            val = Math.max(currentAlloc, Math.min(val, rNode.totalInstances));
+                            
+                            if (val != originalVal) {
+                                et.removeTextChangedListener(this);
+                                et.setText(String.valueOf(val));
+                                et.setSelection(et.getText().length());
+                                et.addTextChangedListener(this);
+                            }
+
+                            node.maxNeed.put(rNode.id, val);
                             updateGraph();
                         } catch (Exception ignored) {}
                     }
@@ -281,7 +341,7 @@ public class KnotWeaveManager {
         }
 
         canvas.clearSelection();
-        updateGraph();
+        refreshState(true);
     }
 
     private void autoGenerateBatch() {
@@ -321,27 +381,51 @@ public class KnotWeaveManager {
 
         canvas.clearSelection();
         showToast("Generated " + countP + " Processes & " + countR + " Resources");
-        updateGraph();
+        refreshState(true);
+    }
+
+    private float[] findFreePosition(float startX, float startY) {
+        float x = startX;
+        float y = startY;
+        float radius = 120f;
+        int maxAttempts = 50;
+        
+        for (int i = 0; i < maxAttempts; i++) {
+            boolean collision = false;
+            for (BankersAlgorithm.Node n : nodes) {
+                if (Math.hypot(n.x - x, n.y - y) < radius * 2) {
+                    collision = true;
+                    break;
+                }
+            }
+            if (!collision) return new float[]{x, y};
+            
+            x = startX + (float) (Math.random() * 400 - 200);
+            y = startY + (float) (Math.random() * 400 - 200);
+        }
+        return new float[]{x, y};
     }
 
     private void addProcess() {
         pCounter++;
         BankersAlgorithm.Node p = new BankersAlgorithm.Node("p" + pCounter, "process", "P" + pCounter);
-        p.x = 220f + (float) (Math.random() * 300);
-        p.y = 220f + (float) (Math.random() * 300);
+        float[] pos = findFreePosition(220f, 220f);
+        p.x = pos[0];
+        p.y = pos[1];
         nodes.add(p);
         showToast("Added Process P" + pCounter);
-        updateGraph();
+        refreshState(true);
     }
 
     private void addResource() {
         rCounter++;
         BankersAlgorithm.Node r = new BankersAlgorithm.Node("r" + rCounter, "resource", "R" + rCounter);
-        r.x = 220f + (float) (Math.random() * 300);
-        r.y = 550f + (float) (Math.random() * 300);
+        float[] pos = findFreePosition(220f, 550f);
+        r.x = pos[0];
+        r.y = pos[1];
         nodes.add(r);
         showToast("Added Resource R" + rCounter);
-        updateGraph();
+        refreshState(true);
     }
 
     private void forceDeadlock() {
@@ -368,7 +452,7 @@ public class KnotWeaveManager {
         }
 
         showToast("Forced Deadlock Cycle!");
-        updateGraph();
+        refreshState(true);
     }
 
     private void clearGraph() {
@@ -378,7 +462,7 @@ public class KnotWeaveManager {
         rCounter = 0;
         canvas.clearSelection();
         showToast("Graph Cleared");
-        updateGraph();
+        refreshState(true);
     }
 
     private void autoResolve() {
@@ -397,7 +481,7 @@ public class KnotWeaveManager {
             edges.removeIf(e -> e.source.equals(victimId) || e.target.equals(victimId));
 
             showToast("Auto Resolved: Killed Process " + (victimNode != null ? victimNode.label : victimId));
-            updateGraph();
+            refreshState(true);
         }
     }
 
@@ -407,6 +491,152 @@ public class KnotWeaveManager {
             toastBanner.setVisibility(View.VISIBLE);
             new Handler(Looper.getMainLooper()).postDelayed(() -> toastBanner.setVisibility(View.GONE), 3000);
         }
+    }
+
+    private void refreshState(boolean rebuildMatrix) {
+        if (rebuildMatrix && !isBuildingMatrix && matrixInputContainer != null && matrixInputContainer.getVisibility() == View.VISIBLE) {
+            buildMatrixTables();
+        }
+        updateGraph();
+    }
+
+    private void buildMatrixTables() {
+        if (matrixInputContainer == null || matrixInputContainer.getVisibility() != View.VISIBLE) return;
+        isBuildingMatrix = true;
+
+        tableAllocation.removeAllViews();
+        tableRequest.removeAllViews();
+
+        List<BankersAlgorithm.Node> pNodes = new ArrayList<>();
+        List<BankersAlgorithm.Node> rNodes = new ArrayList<>();
+        for (BankersAlgorithm.Node n : nodes) {
+            if ("process".equals(n.type)) pNodes.add(n);
+            if ("resource".equals(n.type)) rNodes.add(n);
+        }
+
+        if (pNodes.isEmpty() || rNodes.isEmpty()) {
+            isBuildingMatrix = false;
+            return;
+        }
+
+        TableRow headerAlloc = new TableRow(ctx);
+        TableRow headerReq = new TableRow(ctx);
+        headerAlloc.addView(createMatrixCell("", true));
+        headerReq.addView(createMatrixCell("", true));
+
+        for (BankersAlgorithm.Node r : rNodes) {
+            headerAlloc.addView(createMatrixCell(r.label, true));
+            headerReq.addView(createMatrixCell(r.label, true));
+        }
+        tableAllocation.addView(headerAlloc);
+        tableRequest.addView(headerReq);
+
+        for (BankersAlgorithm.Node p : pNodes) {
+            TableRow rowAlloc = new TableRow(ctx);
+            TableRow rowReq = new TableRow(ctx);
+            
+            rowAlloc.addView(createMatrixCell(p.label, true));
+            rowReq.addView(createMatrixCell(p.label, true));
+
+            for (BankersAlgorithm.Node r : rNodes) {
+                int allocCount = 0;
+                int reqCount = 0;
+                for (BankersAlgorithm.Edge e : edges) {
+                    if (e.source.equals(r.id) && e.target.equals(p.id)) allocCount++;
+                    if (e.source.equals(p.id) && e.target.equals(r.id)) reqCount++;
+                }
+
+                rowAlloc.addView(createMatrixInputCell(p, r, allocCount, false));
+                rowReq.addView(createMatrixInputCell(p, r, reqCount, true));
+            }
+            tableAllocation.addView(rowAlloc);
+            tableRequest.addView(rowReq);
+        }
+
+        isBuildingMatrix = false;
+    }
+
+    private View createMatrixCell(String text, boolean isHeader) {
+        TextView tv = new TextView(ctx);
+        tv.setText(text);
+        tv.setTextColor(isHeader ? Color.parseColor("#D0BCFF") : Color.WHITE);
+        tv.setTextSize(13f);
+        if (isHeader) tv.setTypeface(null, android.graphics.Typeface.BOLD);
+        tv.setGravity(Gravity.CENTER);
+        tv.setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8));
+        return tv;
+    }
+
+    private View createMatrixInputCell(BankersAlgorithm.Node p, BankersAlgorithm.Node r, int value, boolean isRequest) {
+        EditText et = new EditText(ctx);
+        et.setInputType(InputType.TYPE_CLASS_NUMBER);
+        et.setText(String.valueOf(value));
+        et.setTextColor(Color.WHITE);
+        et.setTextSize(13f);
+        et.setGravity(Gravity.CENTER);
+        et.setBackgroundResource(R.drawable.input_field_bg);
+        
+        TableRow.LayoutParams lp = new TableRow.LayoutParams(dpToPx(40), dpToPx(36));
+        lp.setMargins(dpToPx(4), dpToPx(4), dpToPx(4), dpToPx(4));
+        et.setLayoutParams(lp);
+
+        et.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable s) {
+                if (isBuildingMatrix) return;
+                int val = 0;
+                try { val = Integer.parseInt(s.toString()); } catch (Exception ignored) {}
+                val = Math.max(0, val);
+                syncEdges(p.id, r.id, val, isRequest, et);
+                updateGraph();
+            }
+        });
+        return et;
+    }
+
+    private void syncEdges(String pId, String rId, int desiredCount, boolean isRequest, EditText et) {
+        String srcId = isRequest ? pId : rId;
+        String tgtId = isRequest ? rId : pId;
+
+        if (!isRequest) {
+            BankersAlgorithm.Node rNode = null;
+            for (BankersAlgorithm.Node n : nodes) if (n.id.equals(rId)) rNode = n;
+            
+            if (rNode != null) {
+                int otherAllocs = 0;
+                for (BankersAlgorithm.Edge e : edges) {
+                    if (e.source.equals(rId) && !e.target.equals(pId)) otherAllocs++;
+                }
+                
+                int maxAllowed = Math.max(0, rNode.totalInstances - otherAllocs);
+                if (desiredCount > maxAllowed) {
+                    desiredCount = maxAllowed;
+                    if (et != null) {
+                        isBuildingMatrix = true;
+                        et.setText(String.valueOf(desiredCount));
+                        et.setSelection(et.getText().length());
+                        isBuildingMatrix = false;
+                        showToast("Max instances reached!");
+                    }
+                }
+                
+                BankersAlgorithm.Node pNode = null;
+                for (BankersAlgorithm.Node n : nodes) if (n.id.equals(pId)) pNode = n;
+                if (pNode != null) {
+                    int currentMax = pNode.maxNeed.containsKey(rId) ? pNode.maxNeed.get(rId) : 0;
+                    if (desiredCount > currentMax) {
+                        pNode.maxNeed.put(rId, desiredCount);
+                    }
+                }
+            }
+        }
+
+        edges.removeIf(e -> e.source.equals(srcId) && e.target.equals(tgtId));
+        for (int i = 0; i < desiredCount; i++) {
+            edges.add(new BankersAlgorithm.Edge(UUID.randomUUID().toString(), srcId, tgtId));
+        }
+        canvas.invalidate();
     }
 
     private void updateGraph() {
